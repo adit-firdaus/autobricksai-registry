@@ -36,10 +36,15 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  OWNER: Autobricks-AI
+  # IMAGE_OWNER: the GHCR namespace owner. Defaults to whatever GitHub user/org
+  # owns this repo (so a fork under adit-firdaus publishes to
+  # ghcr.io/adit-firdaus/autobricksai-registry/*). Set this to a literal
+  # (e.g. `Autobricks-AI`) at the org or repo "Variables and secrets" level
+  # to force the prod namespace regardless of where the repo is hosted.
+  IMAGE_OWNER: ${{ github.repository_owner }}
   PACKAGE: autobricksai-registry
-  FULL_IMAGE: ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes
-  SPINUP_IMAGE: ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes-spinup
+  FULL_IMAGE: ghcr.io/${{ github.repository_owner }}/autobricksai-registry/autobot-hermes
+  SPINUP_IMAGE: ghcr.io/${{ github.repository_owner }}/autobricksai-registry/autobot-hermes-spinup
 
 permissions:
   contents: read

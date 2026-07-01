@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Hermes Local — one-command installer for students.
 # Runs Hermes (WebUI :8787) locally in Docker, wired to AutoBricks as the model provider.
-# Image pulled from the autobricksai-registry package on GHCR:
-#   ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes
+# Image pulled from the autobricksai-registry package on GHCR. Owner name is
+# taken from $IMAGE_OWNER (default Autobricks-AI; override for forks / mirrors):
+#   ghcr.io/${IMAGE_OWNER}/autobricksai-registry/autobot-hermes
 # Built by this repo's .github/workflows/build-push.yml (see autobricksai-registry README.md).
 #
 # Usage (student):
@@ -12,8 +13,11 @@
 # Overrides (env):
 #   AUTOBRICKS_API_KEY   your abai_sk_live_... key (else you'll be prompted)
 #   AUTOBRICKS_BASE_URL  model API base (default https://api.autobricksai.com/v1)
+#   IMAGE_OWNER          GHCR namespace owner
+#                        default Autobricks-AI. For personal mirrors / forks /
+#                        class cohorts, set e.g. IMAGE_OWNER=adit-firdaus.
 #   HERMES_IMAGE         image ref
-#                        default ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:latest
+#                        default ghcr.io/${IMAGE_OWNER}/autobricksai-registry/autobot-hermes:latest
 #                        pin a tag with HERMES_IMAGE=...autobot-hermes:vX.Y.Z or :main-<sha>
 #   APP_DIR              install dir (default ~/autobricks-hermes)
 #
@@ -29,7 +33,13 @@ ENV_FILE="$DATA_DIR/.env"
 CONFIG_FILE="$DATA_DIR/config.yaml"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 BASE_URL="${AUTOBRICKS_BASE_URL:-https://api.autobricksai.com/v1}"
-IMAGE="${HERMES_IMAGE:-ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:latest}"
+IMAGE_OWNER="${IMAGE_OWNER:-Autobricks-AI}"
+# Honour a fully-overridden HERMES_IMAGE; otherwise derive from IMAGE_OWNER.
+if [ -n "${HERMES_IMAGE:-}" ]; then
+  IMAGE="$HERMES_IMAGE"
+else
+  IMAGE="ghcr.io/${IMAGE_OWNER}/autobricksai-registry/autobot-hermes:latest"
+fi
 DEFAULT_MODEL="autobricksai/mimo-2.5"
 PORT=8787
 

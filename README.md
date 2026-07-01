@@ -24,9 +24,16 @@ This repo exists so the image layer can ship independently from the API:
 > Requires Docker (Desktop, or Engine on Linux) and a free AutoBricks API key
 > from `autobricksai.com → account → API Keys`.
 
+The published source lives in the GitHub org that owns the image registry.
+Today that's **`Autobricks-AI/autobricksai-registry`**. If you're running
+from a fork / cohort mirror, replace the URL with your mirror path.
+
 ```bash
 # Paste your key into the installer (or set AUTOBRICKS_API_KEY=abai_sk_live_... first):
 curl -fsSL https://raw.githubusercontent.com/Autobricks-AI/autobricksai-registry/main/install/install.sh | bash
+
+# From a fork / class-cohort mirror:
+curl -fsSL https://raw.githubusercontent.com/<your-org>/autobricksai-registry/main/install/install.sh | bash
 ```
 
 What it does (see `install/install.sh` for the canonical docblock):
@@ -113,22 +120,26 @@ docker compose down                             # stop (keeps your data in ./dat
 | Push tag `v*` | Builds both images, pushes `:vX.Y.Z`, `:vX.Y`, `:vX`, `:latest` |
 | Manual dispatch | Rebuilds on demand; optional `tag_override` input |
 
-Both images publish to a single GHCR package under
-`ghcr.io/Autobricks-AI/autobricksai-registry`:
+Both images publish to a single GHCR package, owned by the **same GitHub
+user/org that owns this repo** (default `IMAGE_OWNER` in the workflow is
+`${{ github.repository_owner }}`). To force the prod namespace
+(`Autobricks-AI`) regardless of where this repo is hosted, set a repo
+variable `IMAGE_OWNER=Autobricks-AI` at
+*Settings → Secrets and variables → Actions → Variables*.
 
 ```
-ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:latest
-ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:main
-ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:vX.Y.Z
+ghcr.io/<owner>/autobricksai-registry/autobot-hermes:latest
+ghcr.io/<owner>/autobricksai-registry/autobot-hermes:main
+ghcr.io/<owner>/autobricksai-registry/autobot-hermes:vX.Y.Z
 
-ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes-spinup:main
-ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes-spinup:latest
+ghcr.io/<owner>/autobricksai-registry/autobot-hermes-spinup:main
+ghcr.io/<owner>/autobricksai-registry/autobot-hermes-spinup:latest
 ```
 
 The autobricks platform's `docker_host.py` resolves each per-bot image
 name to a registry URL. Once the workflow's first build goes green, swap
 the legacy `82.22.63.206:5000/autobricks/autobot-hermes:latest` references
-over to `ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:<tag>`.
+over to `ghcr.io/<owner>/autobricksai-registry/autobot-hermes:<tag>`.
 
 ### Automatic public-visibility enforcement
 
@@ -146,8 +157,9 @@ If neither succeeds (e.g. the org-scoped package needs an org admin PAT but
 none has been provisioned), the step logs a `:warning::` annotation and a
 link to the manual settings page but does **not** fail the workflow — the
 images are pushed, so authenticated callers can still pull. Always follow
-up by manually flipping visibility at:
-`github.com/orgs/Autobricks-AI/packages/container/autobricksai-registry/settings`.
+up by manually flipping visibility at
+`github.com/<org-or-user>/packages/container/autobricksai-registry/settings`
+(use `…/orgs/…` for org-owned packages, `…/users/…` for personal ones).
 
 A subsequent `Verify image is publicly pullable` step HEADs the registry
 manifest for `:latest` after each main-branch build; a non-200 there means
@@ -179,11 +191,12 @@ entrypoint), you can build that locally:
 
 ```bash
 # Pull whichever tag the main image was published under
-docker pull ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:main
+# Replace <owner> with Autobricks-AI for prod, or your fork's GitHub owner.
+docker pull ghcr.io/<owner>/autobricksai-registry/autobot-hermes:main
 
 # Bake the spinup patch over it
 docker build \
-  --build-arg HERMES_IMAGE=ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:main \
+  --build-arg HERMES_IMAGE=ghcr.io/<owner>/autobricksai-registry/autobot-hermes:main \
   -f build/Dockerfile.spinup-patch \
   -t autobricksai/autobot-hermes-spinup:local \
   .
