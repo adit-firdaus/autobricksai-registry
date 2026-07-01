@@ -196,9 +196,12 @@ services:
     environment:
       ABAI_RUNTIME: runc
       HERMES_HOME: /opt/data
+      # relaxed gateway auth is acceptable ONLY because the port below is bound to
+      # loopback (single-user local install). Do not expose this port publicly.
       GATEWAY_ALLOW_ALL_USERS: "true"
     ports:
-      - "${Port}:${Port}"
+      # Bind to 127.0.0.1 so Hermes is reachable only from this machine, not the LAN/wifi.
+      - "127.0.0.1:${Port}:${Port}"
     volumes:
       - ./data:/opt/data
     restart: unless-stopped

@@ -181,9 +181,12 @@ services:
     environment:
       ABAI_RUNTIME: runc
       HERMES_HOME: /opt/data
+      # ponytail: relaxed gateway auth is acceptable ONLY because the port below is
+      # bound to loopback (single-user local install). Do not expose this port publicly.
       GATEWAY_ALLOW_ALL_USERS: "true"
     ports:
-      - "$PORT:$PORT"
+      # Bind to 127.0.0.1 so Hermes is reachable only from this machine, not the LAN/wifi.
+      - "127.0.0.1:$PORT:$PORT"
     volumes:
       # ponytail: host bind-mount so the installer writes provider config from the host
       # with no docker-cp dance. Entrypoint chowns to 1000:1000 on boot; data persists.
