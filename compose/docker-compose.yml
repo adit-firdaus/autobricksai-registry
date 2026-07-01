@@ -1,0 +1,74 @@
+# Hermes Local — standalone Docker Compose (no curl needed).
+#
+# 1) Put your AutoBricks API key in a file named ".env" next to this file:
+#        AUTOBRICKS_API_KEY=abai_sk_live_xxxxxxxx
+#    (or export it in your shell before running).
+# 2) Start it:
+#        docker compose up -d
+# 3) Open http://localhost:8787  (login password: value of HERMES_PASSWORD, default "hermes")
+#
+# Update:   docker compose pull && docker compose up -d
+# Stop:     docker compose down          (add -v to also delete data)
+#
+# Needs Docker Desktop (or Docker Engine) running. Image is amd64; Apple Silicon
+# runs it under emulation automatically (enable Rosetta in Docker Desktop).
+
+name: autobricks-hermes
+
+configs:
+  # Provider config injected at /opt/data/config.yaml — tells Hermes to use AutoBricks.
+  provider_config:
+    content: |
+      model:
+        default: autobricksai/mimo-2.5
+        provider: abai
+      providers:
+        abai:
+          name: AutoBricks AI
+          api: https://api.autobricksai.com/v1
+          key_env: AUTOBRICKS_API_KEY
+          transport: openai_chat
+          models:
+            - autobricksai/mimo-2.5
+            - autobricksai/claude-haiku-4.5
+            - autobricksai/claude-sonnet-4.6
+            - autobricksai/claude-opus-4.7
+            - autobricksai/gemini-2.5-flash
+            - autobricksai/gemini-2.5-pro
+            - autobricksai/gpt-5.4
+            - autobricksai/gpt-4.1
+            - autobricksai/deepseek-v4
+            - autobricksai/qwen3-235b
+
+services:
+  hermes:
+    image: ghcr.io/adit-firdaus/autobricksai-registry/autobot-hermes:latest
+    platform: linux/amd64          # image is amd64-only; arm64 hosts emulate
+    container_name: autobricks-hermes
+    environment:
+      AUTOBRICKS_API_KEY: ${AUTOBRICKS_API_KEY:?Set AUTOBRICKS_API_KEY in a .env file next to this compose file}
+      OPENAI_API_KEY: ${AUTOBRICKS_API_KEY}      # hermes-workspace OpenAI-compat mode uses the same key
+      # Shared internal gateway token (loopback-only, so a fixed value is fine).
+      API_SERVER_KEY: hermes-local-gateway-token
+      HERMES_API_TOKEN: hermes-local-gateway-token
+      # WebUI login password — override by setting HERMES_PASSWORD in .env.
+      HERMES_WEBUI_PASSWORD: ${HERMES_PASSWORD:-hermes}
+      CLAUDE_PASSWORD: ${HERMES_PASSWORD:-hermes}
+      HERMES_PASSWORD: ${HERMES_PASSWORD:-hermes}
+      HERMES_HOME: /opt/data
+      # In this single-container install the gateway runs in-container on 127.0.0.1:8642.
+      # The image otherwise defaults to a multi-container host (hermes-agent) that 401s.
+      HERMES_API_URL: http://127.0.0.1:8642
+      ABAI_RUNTIME: runc
+      GATEWAY_ALLOW_ALL_USERS: "true"    # OK: port below is loopback-only
+    configs:
+      - source: provider_config
+        target: /opt/data/config.yaml
+    ports:
+      - "127.0.0.1:8787:8787"        # reachable only from this machine, not the network
+    volumes:
+      - hermes_data:/opt/data        # persists chats/config across restarts
+    restart: unless-stopped
+
+volumes:
+  hermes_data:
