@@ -273,9 +273,12 @@ function DoInstall {
 
   Push-Location $AppDir
   try {
-    Info "Pulling image $Image ..."
-    Compose pull
-    if ($LASTEXITCODE -ne 0) { Die 'docker compose pull failed.' }
+    # Use `docker pull` (per-layer animated progress) instead of `docker compose pull`
+    # (a coarse N/M counter that looks frozen on a big single image). --platform keeps
+    # the amd64 pin. compose up then reuses the cached image without re-pulling.
+    Info "Pulling image $Image  (~5 GB first time) ..."
+    & docker pull --platform linux/amd64 $Image
+    if ($LASTEXITCODE -ne 0) { Die 'docker pull failed.' }
     Info 'Starting Hermes ...'
     Compose up -d
     if ($LASTEXITCODE -ne 0) { Die 'docker compose up failed.' }
@@ -321,8 +324,8 @@ function DoUpdate {
   try {
     $before = (& docker image inspect $Image --format '{{.Id}}' 2>$null); if (-not $before) { $before = 'none' }
     Info 'Pulling latest image ...'
-    Compose pull
-    if ($LASTEXITCODE -ne 0) { Die 'docker compose pull failed.' }
+    & docker pull --platform linux/amd64 $Image
+    if ($LASTEXITCODE -ne 0) { Die 'docker pull failed.' }
     $after = (& docker image inspect $Image --format '{{.Id}}' 2>$null); if (-not $after) { $after = 'none' }
     if ($before -eq $after) { Ok 'Already up to date.' } else { Info "New image: $after (was $before)" }
     Info 'Restarting with latest ...'

@@ -264,8 +264,11 @@ do_install() {
   write_compose
 
   cd "$APP_DIR"
-  info "Pulling image $IMAGE ..."
-  $COMPOSE pull
+  # Use `docker pull` (per-layer animated progress) instead of `docker compose pull`
+  # (a coarse N/M counter that looks frozen on a big single image). --platform keeps
+  # the amd64 pin. compose up then reuses the cached image without re-pulling.
+  info "Pulling image $IMAGE  (~5 GB first time) ..."
+  docker pull --platform linux/amd64 "$IMAGE"
   info "Starting Hermes ..."
   $COMPOSE up -d
   wait_up
@@ -309,7 +312,7 @@ do_update() {
   local before after
   before="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)"
   info "Pulling latest image ..."
-  $COMPOSE pull
+  docker pull --platform linux/amd64 "$IMAGE"
   after="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)"
   if [ "$before" = "$after" ]; then
     ok "Already up to date."
