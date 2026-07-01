@@ -93,14 +93,17 @@ jobs:
           echo "Comparing vendored Dockerfile against upstream at ${upstream_url}"
           curl -fsSL -o /tmp/upstream.dockerfile "${upstream_url}"
 
-          # Strip the autobricks-added header (everything before the first
-          # "# syntax=docker/dockerfile" line) and the rest must compare equal.
-          # Using awk so we don't depend on GNU vs BSD sed behaviour.
-          awk 'found{print} /^# syntax=docker\/dockerfile/{found=1; print}' \
+          # Strip everything up to (but including) the first `FROM ` line —
+          # the only line that's guaranteed to be present in BOTH files at the
+          # same logical position. This drops:
+          #   * the autobricks-added comment header from the vendored file
+          #   * upstream's `# syntax=...` + `# Hermes Workspace — ...` header
+          #   * upstream's "# ─── build stage ──..." divider
+          # What remains on both sides must compare equal.
+          awk 'found{print} /^FROM /{found=1; print}' \
             /tmp/upstream.dockerfile > /tmp/upstream.trimmed
 
-          # Vendored equivalent: strip from start of file to "# syntax=docker/dockerfile".
-          awk 'found{print} /^# syntax=docker\/dockerfile/{found=1; print}' \
+          awk 'found{print} /^FROM /{found=1; print}' \
             build/hermes-workspace-base/Dockerfile > /tmp/vendored.trimmed
 
           if ! diff -q /tmp/upstream.trimmed /tmp/vendored.trimmed >/dev/null; then
@@ -109,7 +112,7 @@ jobs:
             diff -u /tmp/upstream.trimmed /tmp/vendored.trimmed | head -40 || true
             exit 1
           fi
-          echo "Vendored Dockerfile matches upstream ${TAG} ✓"
+          echo "Vendored Dockerfile body matches upstream ${TAG} ✓"
 
       - name: Download upstream source tarball
         id: src
