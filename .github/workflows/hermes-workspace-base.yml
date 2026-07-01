@@ -140,6 +140,37 @@ jobs:
               exit 1
             fi
           done
+
+          # pnpm 11 tightened the build-script approval policy: dependencies
+          # with post-install scripts now need to be explicitly whitelisted
+          # in `.npmrc` via `onlyBuiltDependencies`, otherwise
+          # `pnpm install --frozen-lockfile` exits 1 with ERR_PNPM_IGNORED_BUILDS.
+          #
+          # Upstream's Dockerfile is unmodified from when v2.3.0 was released
+          # (May 8, 2026) — at that point pnpm 11's stricter policy wasn't
+          # yet active against this lockfile. Their published image was
+          # built before the policy landed.
+          #
+          # We CANNOT modify the upstream Dockerfile (drift check enforces
+          # byte-equality), so we APPEND a whitelist section to upstream's
+          # `.npmrc` instead (preserving `legacy-peer-deps=true`). BuildKit's
+          # `COPY . .` in the upstream Dockerfile picks it up, and pnpm
+          # reads `.npmrc` from cwd at install time.
+          npmrc="upstream-src/.npmrc"
+          if [ ! -f "${npmrc}" ]; then
+            : > "${npmrc}"
+          fi
+          printf '\n# autobricks build-context override (appended)\n' >> "${npmrc}"
+          printf '# whitelists build scripts for packages pnpm 11+ refuses to\n' >> "${npmrc}"
+          printf '# auto-approve. Keep in lockstep with the\n' >> "${npmrc}"
+          printf '# ERR_PNPM_IGNORED_BUILDS list output by pnpm install.\n' >> "${npmrc}"
+          printf 'onlyBuiltDependencies[]=esbuild\n' >> "${npmrc}"
+          printf 'onlyBuiltDependencies[]=electron\n' >> "${npmrc}"
+          printf 'onlyBuiltDependencies[]=electron-winstaller\n' >> "${npmrc}"
+          printf 'onlyBuiltDependencies[]=unrs-resolver\n' >> "${npmrc}"
+          echo "Injected .npmrc whitelist (preserved upstream legacy-peer-deps):"
+          cat "${npmrc}"
+
           echo "upstream-src unpacked OK:"
           ls -la upstream-src | head -20
 
