@@ -1,0 +1,23 @@
+# autobricksai-registry — autobot-hermes spinup-patch
+#
+# Thin patch layer — rebases spinup fixes onto the current registry image without
+# a full rebuild (which needs hermes-workspace-local on the build host).
+# Used on dh4 when hermes-workspace-local:v2.3.0 is not available locally.
+#
+# Override the base image at build time with --build-arg HERMES_IMAGE=...
+# if you publish under a different registry/namespace. The GitHub workflow
+# in .github/workflows/build-push.yml pushes autobot-hermes:latest to GHCR
+# as ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:latest.
+#
+# Pinning policy: NEVER tag-target :latest in production. Always rebuild
+# the parent image from this repo + this workflow, then rebase the spinup
+# patch with --build-arg HERMES_IMAGE=<sha-pin> for reproducible deploys.
+ARG HERMES_IMAGE=ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes:latest
+FROM ${HERMES_IMAGE}
+USER root
+COPY entrypoint/supervisord.conf /etc/supervisor/conf.d/hermes.conf
+COPY entrypoint/entrypoint.sh /entrypoint.sh
+COPY entrypoint/wait-for-hermes-gateway.sh /opt/hermes/scripts/wait-for-hermes-gateway.sh
+RUN chmod 0755 /entrypoint.sh /opt/hermes/scripts/wait-for-hermes-gateway.sh
+USER workspace
+ENTRYPOINT ["/entrypoint.sh"]

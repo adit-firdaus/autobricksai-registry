@@ -1,0 +1,13 @@
+# Build artefacts
+.DS_Store
+*.log
+*.tmp
+__pycache__/
+*.pyc
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Local-only build scratch
+build-context/

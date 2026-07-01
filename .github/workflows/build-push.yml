@@ -1,0 +1,265 @@
+name: build-push
+
+# Build the autobot-hermes image from this repo and push it to GHCR.
+#
+# Triggers:
+#   - push to main      → always rebuild + push :main (and :latest)
+#   - push tag v*       → push :<tag> + :latest + a date stamp
+#   - workflow_dispatch → manual rebuild (optional override tag)
+#
+# Registry: ghcr.io/Autobricks-AI/autobricksai-registry
+# Image names within that package:
+#   - autobot-hermes        ← the full image (replaces autobricksai-registry/autobot-hermes:latest in production)
+#   - autobot-hermes-spinup ← the thin patch layer (Dockerfile.spinup-patch)
+#
+# Required permissions:
+#   Repository → Settings → Actions → General → Workflow permissions:
+#     "Read and write permissions"
+#     "Allow GitHub Actions to create and approve pull requests": optional
+#   GitHub automatically creates the GHCR package on first push. The default
+#   GITHUB_TOKEN has packages:write on this repo. No PAT needed.
+#
+# Layer caching: type=gha uses GitHub's built-in cache (≈ free). First cold
+# build will take ~20 min because we install Chromium + Camoufox + LibreOffice
+# + every Python wheel; subsequent runs hit the cache and finish in ~2–4 min.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Override the primary tag (defaults to 'main' on dispatch)"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: Autobricks-AI
+  PACKAGE: autobricksai-registry
+  FULL_IMAGE: ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes
+  SPINUP_IMAGE: ghcr.io/Autobricks-AI/autobricksai-registry/autobot-hermes-spinup
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write  # required for OIDC-based provenance, harmless for GHCR login
+
+jobs:
+  build:
+    name: build & push autobot-hermes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve primary tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag_override }}" ]; then
+            echo "primary=${{ inputs.tag_override }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "primary=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "primary=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.FULL_IMAGE }}
+            ${{ env.SPINUP_IMAGE }}
+          tags: |
+            # primary on every push (main / tag-name / dispatch override)
+            type=raw,value=${{ steps.tag.outputs.primary }},enable=${{ github.event_name != 'pull_request' }}
+            # :latest on main + dispatch override (NOT on PRs)
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || inputs.tag_override != '') }}
+            # date stamp on main for archaeology
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}},enable={{is_default_branch}}
+            # SemVer variants on v* tags
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+          labels: |
+            org.opencontainers.image.title=autobot-hermes
+            org.opencontainers.image.description=Autobricks AI Hermes bot image (hermes-agent + hermes-workspace + AutoBricks overlays)
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Proprietary
+
+      # Build the FULL image (Dockerfile in build/). Use the repo root as the
+      # build context because that Dockerfile references ./patches/,
+      # ./entrypoint/, ./skills/ paths.
+      - name: Build autobot-hermes
+        id: build_main
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=main
+          cache-to: type=gha,mode=max,scope=main
+          provenance: true
+          sbom: true
+          platforms: linux/amd64
+
+      # Build the SPINUP-PATCH image (rebases entrypoint bits onto the
+      # main image we just published). This is a separate image in the
+      # same package so the autobricks platform's docker_host.py can pull
+      # either one. We do NOT cache this through gha because it's so
+      # cheap (~5 MB of patches) that the cache-write is the long pole.
+      - name: Build autobot-hermes-spinup
+        id: build_spinup
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile.spinup-patch
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.SPINUP_IMAGE }}:${{ steps.tag.outputs.primary }}
+            ${{ env.SPINUP_IMAGE }}:main
+          build-args: |
+            HERMES_IMAGE=${{ env.FULL_IMAGE }}:${{ steps.tag.outputs.primary }}
+          cache-from: type=gha,scope=spinup
+          cache-to: type=gha,mode=max,scope=spinup
+          provenance: true
+          sbom: true
+          platforms: linux/amd64
+
+      # ─── Make GHCR package public ──────────────────────────────────────────
+      # GHCR auto-creates packages on first push under the org's namespace,
+      # defaults them to PRIVATE, and offers no UI-free automation by default.
+      # GitHub's REST endpoint PATCH /{orgs|user}/packages/container/{pkg}/visibility
+      # requires a token with the write:packages scope on the org. The default
+      # GITHUB_TOKEN in Actions has packages:write ONLY for repo-scoped packages
+      # (not for newly auto-created org-scoped ones). So:
+      #
+      #   1. Try GITHUB_TOKEN first — works for repo-scoped packages.
+      #   2. Fall back to GHCR_ADMIN_TOKEN (a PAT the maintainer creates once:
+      #        github.com/settings/tokens → write:packages scope
+      #        → stored as org/org-repo secret GHCR_ADMIN_TOKEN).
+      #      The step is not a hard failure if neither succeeds: the build is
+      #      already pushed; visibility can be flipped manually in the GHCR
+      #      package settings as a one-time fallback. We record a warning, not
+      #      an error, so the workflow still green-checks.
+      - name: Make GHCR package public
+        if: github.event_name != 'pull_request'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ github.event.repository.name }}
+          GHCR_ADMIN_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # GitHub Packages GHCR endpoints differ by owner type:
+          # org-owned → /orgs/{owner}/packages/container/{pkg}/visibility
+          # user-owned → /users/{owner}/packages/container/{pkg}/visibility
+          owner_type="$(gh api "/users/${OWNER}" --jq '.type' 2>/dev/null || echo Organization)"
+          if [[ "${owner_type}" == "Organization" ]]; then
+            base="/orgs/${OWNER}/packages/container/${PACKAGE}"
+          else
+            base="/users/${OWNER}/packages/container/${PACKAGE}"
+          fi
+
+          current="$(gh api "${base}" --jq '.visibility' 2>/dev/null || echo unknown)"
+          echo "current visibility for ${OWNER}/${PACKAGE}: ${current}"
+
+          if [[ "${current}" == "public" ]]; then
+            echo "::notice::GHCR package already public — skipping PATCH."
+            exit 0
+          fi
+
+          set_public() {
+            local token="$1"
+            GH_TOKEN="${token}" gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "${base}/visibility" \
+              -f visibility=public >/dev/null
+          }
+
+          # Attempt 1: GITHUB_TOKEN (works for repo-scoped packages).
+          if set_public "${GITHUB_TOKEN}" 2>/dev/null; then
+            echo "::notice::Set GHCR package public via GITHUB_TOKEN."
+          # Attempt 2: GHCR_ADMIN_TOKEN (PAT with write:packages scope on the org).
+          elif [ -n "${GHCR_ADMIN_TOKEN}" ] && set_public "${GHCR_ADMIN_TOKEN}" 2>/dev/null; then
+            echo "::notice::Set GHCR package public via GHCR_ADMIN_TOKEN."
+          else
+            echo "::warning::Could not set GHCR package visibility automatically."
+            echo "::warning::Both GITHUB_TOKEN and GHCR_ADMIN_TOKEN were rejected (common cause: package is org-scoped and the token lacks write:packages on the org)."
+            echo "::warning::Flip visibility manually: https://github.com/orgs/${OWNER}/packages/container/${PACKAGE}/settings"
+            # Don't fail the workflow — images are pushed and pull-able to authenticated callers.
+            exit 0
+          fi
+
+          # Confirm.
+          post="$(gh api "${base}" --jq '.visibility')"
+          if [[ "${post}" != "public" ]]; then
+            echo "::warning::Expected public after PATCH, got '${post}'."
+            exit 0
+          fi
+          echo "::notice::GHCR package visibility is now public."
+
+      # ─── Smoke-check the published image is anonymously pullable ──────────
+      # A `:latest` tag is part of the public contract (install.sh defaults
+      # to it). Probing HEAD against the registry's manifest endpoint without
+      # auth proves the visibility flip took effect and the workflow's happy
+      # path matches what students will see.
+      - name: Verify image is publicly pullable
+        if: github.event_name != 'pull_request' && steps.tag.outputs.primary == 'main'
+        env:
+          IMAGE: ${{ env.FULL_IMAGE }}
+          TAG: latest
+        run: |
+          # GHCR uses Docker Registry v2. Anonymous HEAD on /v2/<image>/manifests/<tag>
+          # with the Accept: application/vnd.docker.distribution.manifest.v2+json header
+          # returns 200 + digest when the image is public.
+          url="https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${TAG}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "${url}")
+          echo "GET ${url} → ${code}"
+          if [ "${code}" != "200" ] && [ "${code}" != "301" ] && [ "${code}" != "302" ]; then
+            echo "::warning::Public pull check returned ${code} — image is published but may not yet be anonymously pullable. Usually resolves within a minute; if it persists, the visibility flip above did not land."
+          fi
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Build pushed"
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- trigger: \`${{ github.event_name }}\`"
+            echo "- primary tag: \`${{ steps.tag.outputs.primary }}\`"
+            echo ""
+            echo "Images published to GHCR:"
+            for t in ${{ steps.meta.outputs.tags }}; do
+              [ -n "$t" ] && echo "- \`$t\`"
+            done
+            echo "- \`${{ env.SPINUP_IMAGE }}:${{ steps.tag.outputs.primary }}\`"
+            echo "- \`${{ env.SPINUP_IMAGE }}:main\`"
+            echo ""
+            echo "Install (students):"
+            echo '```bash'
+            echo 'curl -fsSL https://raw.githubusercontent.com/'"${{ github.repository_owner }}"'/autobricksai-registry/main/install/install.sh | bash'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

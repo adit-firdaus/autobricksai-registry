@@ -1,0 +1,221 @@
+/* ============================================================
+   AutoBricks AI — Hermes report stylesheet
+   ----------------------------------------------------------
+   Used by the bundled productivity/pdf skill (weasyprint) to
+   render any analytics / summary / report PDF the agent
+   generates. Brand tokens lifted from
+   api/autobricksai/templates/pdf/document.html (the invoice +
+   agreement template) — keep visually consistent with those.
+   System-font stack only — no webfont downloads, so the image
+   stays slim. Override via inline <style> if a one-off report
+   needs custom touches.
+   ============================================================ */
+
+@page {
+  size: A4;
+  margin: 22mm 20mm 24mm 20mm;
+  @bottom-center {
+    content: string(report-footer);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 8pt;
+    color: #8a8a8a;
+  }
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 8pt;
+    color: #8a8a8a;
+  }
+}
+
+/* The first <p class="report-footer-meta"> captures into the page footer.
+   Put it once near the top of the document: e.g.
+   <p class="report-footer-meta">Generated 18 May 2026 · munki</p> */
+.report-footer-meta {
+  string-set: report-footer content();
+  position: absolute;
+  visibility: hidden;
+  height: 0;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.55;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+/* ---- Report header (H1 + optional subtitle) ---- */
+h1 {
+  font-size: 22pt;
+  font-weight: 800;
+  color: #e1251b;
+  margin: 0 0 4pt;
+  letter-spacing: 0.6pt;
+  text-transform: uppercase;
+  border-bottom: 2pt solid #e1251b;
+  padding-bottom: 10pt;
+}
+
+.subtitle,
+h1 + p {
+  font-size: 10pt;
+  color: #525252;
+  margin: 0 0 24pt;
+  font-style: italic;
+}
+
+/* ---- Section header (per platform / per topic) ---- */
+h2 {
+  font-size: 14pt;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 22pt 0 10pt;
+  padding-bottom: 4pt;
+  border-bottom: 1pt solid #e6e6e6;
+  break-after: avoid;
+}
+h2 .handle,
+h2 small {
+  font-size: 10pt;
+  font-weight: 500;
+  color: #8a8a8a;
+  margin-left: 6pt;
+}
+
+/* ---- Metric group label ---- */
+h3 {
+  font-size: 11pt;
+  font-weight: 600;
+  color: #2932e1;
+  margin: 14pt 0 6pt;
+  break-after: avoid;
+}
+
+/* ---- Summary card (1-2 sentence takeaway) ---- */
+.summary-card {
+  background: #f7f7fa;
+  border-left: 3pt solid #2932e1;
+  padding: 10pt 12pt;
+  margin: 6pt 0 14pt;
+  font-size: 10pt;
+  color: #1a1a1a;
+  line-height: 1.5;
+  border-radius: 2pt;
+}
+
+/* ---- Metric tables ---- */
+table.metrics,
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 14pt;
+  font-size: 9.5pt;
+}
+table.metrics thead,
+table thead {
+  background: #1a1a1a;
+}
+table.metrics th,
+table th {
+  color: #ffffff;
+  font-size: 8pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5pt;
+  padding: 6pt 10pt;
+  text-align: left;
+}
+table.metrics td,
+table td {
+  padding: 5pt 10pt;
+  border-bottom: 0.5pt solid #ededed;
+  vertical-align: top;
+}
+table.metrics tbody tr:nth-child(even) td,
+table tbody tr:nth-child(even) td {
+  background: #f9fafb;
+}
+table.metrics .right,
+table .right,
+table.metrics td:last-child,
+table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ---- KPI strip (optional, for headline numbers) ---- */
+.kpi-row {
+  display: flex;
+  gap: 10pt;
+  margin: 10pt 0 16pt;
+}
+.kpi {
+  flex: 1;
+  padding: 10pt 12pt;
+  border: 0.5pt solid #e6e6e6;
+  border-radius: 4pt;
+  background: #ffffff;
+}
+.kpi .label {
+  font-size: 7.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.6pt;
+  color: #8a8a8a;
+  font-weight: 700;
+  margin-bottom: 4pt;
+}
+.kpi .value {
+  font-size: 18pt;
+  font-weight: 800;
+  color: #1a1a1a;
+  line-height: 1;
+}
+.kpi .delta {
+  font-size: 9pt;
+  margin-top: 2pt;
+  font-weight: 600;
+}
+.kpi .delta.up { color: #16a34a; }
+.kpi .delta.down { color: #e1251b; }
+
+/* ---- Inline emphasis ---- */
+strong, b { color: #1a1a1a; font-weight: 700; }
+em, i { color: #525252; }
+
+/* ---- Lists (de-emphasised; prefer tables for data) ---- */
+ul, ol {
+  margin: 4pt 0 12pt 16pt;
+  padding: 0;
+  font-size: 10pt;
+}
+li { margin-bottom: 3pt; }
+
+/* ---- Code / monospace ---- */
+code, pre, .mono {
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-size: 9pt;
+  background: #f0f0f3;
+  padding: 1pt 4pt;
+  border-radius: 2pt;
+}
+pre {
+  padding: 8pt 10pt;
+  background: #f7f7fa;
+  border-left: 2pt solid #e6e6e6;
+  white-space: pre-wrap;
+}
+
+/* ---- Section break ---- */
+hr {
+  border: none;
+  border-top: 0.5pt solid #ededed;
+  margin: 20pt 0;
+}
+
+/* ---- Print niceties ---- */
+h2, h3 { page-break-after: avoid; }
+table, .summary-card, .kpi-row { page-break-inside: avoid; }
