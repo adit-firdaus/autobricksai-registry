@@ -15,6 +15,13 @@
 #                                     build time + first entrypoint start
 #   skills/skill-workflow/          ← pre-installed skill bundle
 
+# ─── File-scope ARG (referenced by Stage 2's FROM below) ─────────────────────
+# Declared before any FROM so it survives BuildKit's stage-scoping rule
+# (an ARG declared after a FROM is invisible to that FROM).
+# CI overrides via --build-arg WORKSPACE_BASE_IMAGE=… (see
+# .github/workflows/build-push.yml env.WORKSPACE_BASE).
+ARG WORKSPACE_BASE_IMAGE=ghcr.io/Autobricks-AI/autobricksai-registry/hermes-workspace-base:v2.3.0
+
 # ─── Stage 1: hermes-agent source + Python 3.13 venv ────────────────────────
 # Provides /opt/hermes/.venv/bin/hermes CLI (gateway) and /opt/hermes/ source.
 #
@@ -41,7 +48,11 @@ FROM nousresearch/hermes-agent:v2026.6.5 AS gateway-src
 # source via the hermes-workspace-base workflow and publishes under our
 # GHCR package. Override WORKSPACE_BASE_IMAGE below to point at a mirror
 # or a personal fork.
-ARG WORKSPACE_BASE_IMAGE=ghcr.io/Autobricks-AI/autobricksai-registry/hermes-workspace-base:v2.3.0
+#
+# NOTE: WORKSPACE_BASE_IMAGE is declared at file scope above (before any
+# FROM) so it can be referenced in this stage's FROM. BuildKit scopes ARGs
+# to the stage they appear in, so a stage-2-only declaration would be
+# invisible to this FROM line.
 FROM ${WORKSPACE_BASE_IMAGE}
 
 USER root
