@@ -196,6 +196,10 @@ services:
     environment:
       ABAI_RUNTIME: runc
       HERMES_HOME: /opt/data
+      # The image defaults HERMES_API_URL to http://hermes-agent:8642 (a multi-container
+      # service name). In this single-container install the gateway runs in-container on
+      # 127.0.0.1:8642, so point the workspace there or it can't reach its backend (401).
+      HERMES_API_URL: "http://127.0.0.1:8642"
       # relaxed gateway auth is acceptable ONLY because the port below is bound to
       # loopback (single-user local install). Do not expose this port publicly.
       GATEWAY_ALLOW_ALL_USERS: "true"
