@@ -81,7 +81,12 @@ docker compose down                             # stop (keeps your data in ./dat
 .
 ├── build/
 │   ├── Dockerfile                  ← full autobot-hermes image (two-stage build)
-│   └── Dockerfile.spinup-patch     ← thin "entrypoint rebaser" layer
+│   ├── Dockerfile.spinup-patch     ← thin "entrypoint rebaser" layer
+│   └── hermes-workspace-base/
+│       Dockerfile                  ← upstream hermes-workspace Dockerfile
+│                                      vendored verbatim so this repo can
+│                                      rebuild the base from upstream source
+│                                      (no host pre-bake step)
 ├── entrypoint/
 │   ├── entrypoint.sh               ← container startup (sourced by supervisord)
 │   ├── supervisord.conf            ← gateway / dashboard / workspace / explorer / ttyd / abai-mcp
@@ -104,7 +109,11 @@ docker compose down                             # stop (keeps your data in ./dat
 │   └── skill-workflow/             ← pre-installed skill bundle (SKILL.md + handler.py)
 ├── install/
 │   └── install.sh                  ← one-command local-Docker installer (pulls the published image)
-├── .github/workflows/build-push.yml← GHCR build, push, and visibility-set pipeline
+├── .github/workflows/
+│   ├── hermes-workspace-base.yml   ← builds + publishes the upstream
+│   │                                  hermes-workspace base to GHCR
+│   └── build-push.yml              ← autobricks overlay build, push, and
+│                                      visibility-set (consumes the base)
 └── README.md                       ← this file
 ```
 
@@ -165,6 +174,58 @@ A subsequent `Verify image is publicly pullable` step HEADs the registry
 manifest for `:latest` after each main-branch build; a non-200 there means
 the visibility flip did not land (GHCR sometimes takes a minute to
 propagate).
+
+---
+
+## Build pipeline (two workflows)
+
+The autobricks overlay (`build-push.yml`) is a **multi-stage** Docker build
+whose Stage-2 base is upstream `outsourc-e/hermes-workspace`. To keep CI
+hosted runners buildable without depending on each autobricks docker host
+having a hand-baked `hermes-workspace-local:vX.Y.Z`, the base is itself
+rebuilt and published by a sibling workflow:
+
+```
+┌────────────────────────────────┐    ┌─────────────────────────────────┐
+│ hermes-workspace-base.yml      │    │ build-push.yml                  │
+│                                │    │                                 │
+│ 1. Download upstream tarball   │    │ 1. docker build build/Dockerfile│
+│    @ pinned tag (v2.3.0)       │    │      FROM $WORKSPACE_BASE       │
+│ 2. Verify vendored Dockerfile  │ ─► │ 2. patchers + entrypoint bits   │
+│    matches upstream byte-for-  │    │ 3. push to GHCR                 │
+│    byte (fail-loud on drift)   │    │ 4. flip GHCR package public     │
+│ 3. docker build (node22, pnpm) │    │ 5. verify public pull           │
+│ 4. push ghcr.io/<owner>/       │    │                                 │
+│    autobricksai-registry/      │    │                                 │
+│    hermes-workspace-base:v2.3.0│    │                                 │
+│ 5. flip GHCR package public    │    │                                 │
+└────────────────────────────────┘    └─────────────────────────────────┘
+```
+
+You **must** publish `hermes-workspace-base` before `build-push.yml` can
+build the overlay (the overlay's Stage-2 FROM references it by tag).
+
+### Bumping the upstream base version
+
+1. Check the upstream release notes at
+   <https://github.com/outsourc-e/hermes-workspace/releases>.
+2. Re-vendor the new Dockerfile into
+   `build/hermes-workspace-base/Dockerfile` (download raw from upstream at
+   the new tag, then prepend the comment header that's already in the file).
+3. Bump `HERMES_WORKSPACE_TAG` in
+   `.github/workflows/hermes-workspace-base.yml` and the `v2.3.0` default in
+   the workflow `inputs`.
+4. Bump `WORKSPACE_BASE_IMAGE` default in `build/Dockerfile` and the
+   `WORKSPACE_BASE` value in `.github/workflows/build-push.yml` to the new
+   tag (e.g. `:v2.4.0`).
+5. Push to `main` and run `hermes-workspace-base.yml` once via
+   *Run workflow* (accept the default tag, which is now the new release).
+6. The next push to `main` (or a manual run) of `build-push.yml` will pick
+   up the new base.
+
+The vendored Dockerfile is checked against upstream at the same tag in a
+verification step; the base workflow **fails the build** if the file in
+this repo has drifted from upstream, so silent divergence is impossible.
 
 ### Required permissions
 

@@ -45,6 +45,11 @@ env:
   PACKAGE: autobricksai-registry
   FULL_IMAGE: ghcr.io/${{ github.repository_owner }}/autobricksai-registry/autobot-hermes
   SPINUP_IMAGE: ghcr.io/${{ github.repository_owner }}/autobricksai-registry/autobot-hermes-spinup
+  # WORKSPACE_BASE: ghcr FQDN + tag for the upstream outsourc-e/hermes-workspace
+  # rebuild. Always inherits from IMAGE_OWNER so the base lives in the same
+  # package. When bumping the upstream version, update this AND
+  # build/Dockerfile's WORKSPACE_BASE_IMAGE arg default.
+  WORKSPACE_BASE: ghcr.io/${{ github.repository_owner }}/autobricksai-registry/hermes-workspace-base:v2.3.0
 
 permissions:
   contents: read
@@ -111,6 +116,11 @@ jobs:
       # Build the FULL image (Dockerfile in build/). Use the repo root as the
       # build context because that Dockerfile references ./patches/,
       # ./entrypoint/, ./skills/ paths.
+      #
+      # The Stage-2 FROM is a build-arg (WORKSPACE_BASE_IMAGE) so CI can flip
+      # to a different registry namespace without editing the Dockerfile.
+      # The base image must already exist in GHCR — publish it first via
+      # .github/workflows/hermes-workspace-base.yml.
       - name: Build autobot-hermes
         id: build_main
         uses: docker/build-push-action@v6
@@ -120,6 +130,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            WORKSPACE_BASE_IMAGE=${{ env.WORKSPACE_BASE }}
           cache-from: type=gha,scope=main
           cache-to: type=gha,mode=max,scope=main
           provenance: true

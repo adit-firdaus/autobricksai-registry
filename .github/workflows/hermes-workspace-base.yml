@@ -1,0 +1,275 @@
+name: hermes-workspace-base
+
+# Build + publish the upstream hermes-workspace image under our GHCR package
+# so the autobricks overlay (in build-push.yml) has a public base it can pull
+# without depending on each autobricks docker host pre-populating
+# `hermes-workspace-local:vX.Y.Z`.
+#
+# What this does:
+#   1. Downloads the upstream `outsourc-e/hermes-workspace` source tarball at
+#      a pinned tag (default v2.3.0).
+#   2. Builds with the vendored Dockerfile in build/hermes-workspace-base/
+#      using that tarball as the build context. The Dockerfile is identical
+#      to upstream's — see that file for the origin link and SHA reference.
+#   3. Tags and pushes the result to
+#      ghcr.io/<owner>/autobricksai-registry/hermes-workspace-base:<tag>
+#      plus :latest so build-push.yml can refer to a moving tag.
+#
+# Why this exists:
+#   - The autobricks overlay Dockerfile's stage-2 `FROM hermes-workspace-local:v2.3.0`
+#     assumed the build host already had a local image baked by hand. CI hosted
+#     runners have no such image, so the build failed at pull time.
+#   - This workflow gives us a public, reproducible base image rebuilt from
+#     pinned upstream sources — no host-side state, no secrets, no manual
+#     pre-bake step.
+#
+# Bumping the upstream version:
+#   1. Browse https://github.com/outsourc-e/hermes-workspace/releases
+#   2. Update HERMES_WORKSPACE_TAG below (workflow input default + env default).
+#   3. Re-vendor build/hermes-workspace-base/Dockerfile from upstream at the
+#      new tag and commit it alongside the tag bump.
+#   4. Push and run this workflow via "Run workflow" with the new tag.
+#   5. Then either re-run build-push.yml or let the next push to main pick
+#      up the new tag (it pulls :latest by default).
+
+on:
+  workflow_dispatch:
+    inputs:
+      hermes_workspace_tag:
+        description: "Upstream outsourc-e/hermes-workspace release tag to build (e.g. v2.3.0)"
+        required: true
+        default: "v2.3.0"
+  # Allow a scheduled weekly check so we can react to new upstream releases.
+  # Any time this cron runs and discovers a tag diff, fire a workflow_dispatch
+  # locally via `gh workflow run` (operator action) — we don't auto-build
+  # on the cron to keep tag-bumps an explicit decision.
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+  PACKAGE: autobricksai-registry
+  # Default upstream release tag used by the autobricks overlay (build-push.yml).
+  # When bumping this, ALSO update build/Dockerfile's `FROM` line and re-vendor
+  # build/hermes-workspace-base/Dockerfile from the new upstream tag.
+  HERMES_WORKSPACE_TAG: v2.3.0
+  BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/autobricksai-registry/hermes-workspace-base
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-base:
+    name: build & push hermes-workspace-base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          input_tag="${{ inputs.hermes_workspace_tag }}"
+          if [ -n "$input_tag" ]; then
+            echo "tag=${input_tag}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${HERMES_WORKSPACE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "tag=${HERMES_WORKSPACE_TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Dockerfile matches upstream
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Belt-and-braces: fetch the upstream Dockerfile at the same tag and
+          # diff it against the vendored one. If they drift, fail loudly so
+          # autobricks never gets a different "upstream-equivalent" base than
+          # upstream ships.
+          upstream_url="https://raw.githubusercontent.com/outsourc-e/hermes-workspace/${TAG}/Dockerfile"
+          echo "Comparing vendored Dockerfile against upstream at ${upstream_url}"
+          curl -fsSL -o /tmp/upstream.dockerfile "${upstream_url}"
+
+          # Strip the autobricks-added header (everything before the first
+          # "# syntax=docker/dockerfile" line) and the rest must compare equal.
+          # Using awk so we don't depend on GNU vs BSD sed behaviour.
+          awk 'found{print} /^# syntax=docker\/dockerfile/{found=1; print}' \
+            /tmp/upstream.dockerfile > /tmp/upstream.trimmed
+
+          # Vendored equivalent: strip from start of file to "# syntax=docker/dockerfile".
+          awk 'found{print} /^# syntax=docker\/dockerfile/{found=1; print}' \
+            build/hermes-workspace-base/Dockerfile > /tmp/vendored.trimmed
+
+          if ! diff -q /tmp/upstream.trimmed /tmp/vendored.trimmed >/dev/null; then
+            echo "::error::Vendored Dockerfile at build/hermes-workspace-base/Dockerfile has drifted from upstream at tag ${TAG}."
+            echo "::error::Re-vendor it (curl the raw file from upstream and place it under the same path) before bumping HERMES_WORKSPACE_TAG."
+            diff -u /tmp/upstream.trimmed /tmp/vendored.trimmed | head -40 || true
+            exit 1
+          fi
+          echo "Vendored Dockerfile matches upstream ${TAG} ✓"
+
+      - name: Download upstream source tarball
+        id: src
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tarball_url="https://api.github.com/repos/outsourc-e/hermes-workspace/tarball/${TAG}"
+          mkdir -p upstream-src
+          echo "Downloading upstream source at tag ${TAG}"
+          curl -fsSL -o upstream-src/upstream.tar.gz "${tarball_url}"
+          # GitHub tarballs extract to a single top-level dir like
+          # `outsourc-e-hermes-workspace-<sha>/`. We flatten that, but ONLY
+          # for files at the top level so we don't unpack nested .git or
+          # similar. The Dockerfile copies package.json + pnpm-lock.yaml*
+          # first; the rest via `COPY . .` — flat is fine.
+          tar -xzf upstream-src/upstream.tar.gz --strip-components=1 \
+              --directory=upstream-src/
+
+          # Required-files sanity check; bail early if upstream dropped a file
+          # we depend on.
+          for f in package.json pnpm-lock.yaml server-entry.js Dockerfile; do
+            if [ ! -e "upstream-src/${f}" ]; then
+              echo "::error::Expected file ${f} missing from upstream tarball at tag ${TAG}."
+              exit 1
+            fi
+          done
+          echo "upstream-src unpacked OK:"
+          ls -la upstream-src | head -20
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.BASE_IMAGE }}
+          tags: |
+            # primary (always the upstream tag)
+            type=raw,value=${{ steps.tag.outputs.tag }},enable=${{ github.event_name != 'pull_request' }}
+            # :latest — ONLY when this run was a default-tag rebuild, never
+            # on one-off tag canaries. Keeps the moving `:latest` tag tied
+            # to the autobricks overlay's expected base.
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' && steps.tag.outputs.promote_latest == 'true' }}
+          labels: |
+            org.opencontainers.image.title=hermes-workspace-base
+            org.opencontainers.image.description=Upstream outsourc-e/hermes-workspace built at tag ${{ steps.tag.outputs.tag }} — base layer for autobricksai-registry/autobot-hermes.
+            org.opencontainers.image.source=https://github.com/outsourc-e/hermes-workspace/tree/${{ steps.tag.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build & push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          # Build context = the unpacked upstream tree. The Dockerfile COPY
+          # paths (package.json, pnpm-lock.yaml*, server-entry.js, etc.)
+          # resolve against this directory.
+          context: upstream-src
+          file: build/hermes-workspace-base/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # No GHA cache for this image: pnpm + node_modules dominate the
+          # build time, and the cache-restore-cost eats any savings for a
+          # ~10 min cold build. Re-enable per image if it proves painful.
+          provenance: true
+          sbom: true
+          platforms: linux/amd64
+
+      - name: Set GHCR package public
+        if: github.event_name != 'pull_request'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ github.event.repository.name }}
+          GHCR_ADMIN_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Same defensive pattern as build-push.yml: try GITHUB_TOKEN first,
+          # fall back to GHCR_ADMIN_TOKEN (PAT with write:packages on the org).
+          # If neither works we just warn — the build pushed the image, and
+          # an org admin can flip visibility by hand at the package settings.
+          owner_type="$(gh api "/users/${OWNER}" --jq '.type' 2>/dev/null || echo Organization)"
+          if [[ "${owner_type}" == "Organization" ]]; then
+            base="/orgs/${OWNER}/packages/container/${PACKAGE}"
+          else
+            base="/users/${OWNER}/packages/container/${PACKAGE}"
+          fi
+
+          current="$(gh api "${base}" --jq '.visibility' 2>/dev/null || echo unknown)"
+          echo "current visibility for ${OWNER}/${PACKAGE}: ${current}"
+          if [[ "${current}" == "public" ]]; then
+            echo "::notice::GHCR package already public — skipping PATCH."
+            exit 0
+          fi
+
+          set_public() {
+            GH_TOKEN="$1" gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "${base}/visibility" \
+              -f visibility=public >/dev/null
+          }
+
+          if set_public "${GITHUB_TOKEN}" 2>/dev/null; then
+            echo "::notice::Set GHCR package public via GITHUB_TOKEN."
+          elif [ -n "${GHCR_ADMIN_TOKEN}" ] && set_public "${GHCR_ADMIN_TOKEN}" 2>/dev/null; then
+            echo "::notice::Set GHCR package public via GHCR_ADMIN_TOKEN."
+          else
+            echo "::warning::Could not set GHCR package visibility automatically."
+            echo "::warning::Flip visibility manually: github.com/<owner>/packages/container/${PACKAGE}/settings"
+            exit 0
+          fi
+
+          post="$(gh api "${base}" --jq '.visibility')"
+          echo "::notice::GHCR package visibility is now '${post}'."
+
+      - name: Verify base is publicly pullable
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ env.BASE_IMAGE }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          url="https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${TAG}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "${url}")
+          echo "GET ${url} → ${code}"
+          if [ "${code}" != "200" ] && [ "${code}" != "301" ] && [ "${code}" != "302" ]; then
+            echo "::warning::Public pull check returned ${code} — visibility flip may not have propagated."
+          fi
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### hermes-workspace-base built"
+            echo "- upstream tag: \`${{ steps.tag.outputs.tag }}\`"
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- trigger: \`${{ github.event_name }}\`"
+            echo "- promoted to :latest: \`${{ steps.tag.outputs.promote_latest }}\`"
+            echo ""
+            echo "Images published:"
+            for t in ${{ steps.meta.outputs.tags }}; do
+              [ -n "$t" ] && echo "- \`$t\`"
+            done
+            echo ""
+            echo "Upstream:"
+            echo "- repo: https://github.com/outsourc-e/hermes-workspace/tree/${{ steps.tag.outputs.tag }}"
+            echo "- release notes: https://github.com/outsourc-e/hermes-workspace/releases/tag/${{ steps.tag.outputs.tag }}"
+            echo ""
+            echo "The autobricks overlay (build-push.yml) consumes this via \`FROM ${BASE_IMAGE}:\${{ steps.tag.outputs.tag }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

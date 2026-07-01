@@ -32,8 +32,17 @@ FROM nousresearch/hermes-agent:v2026.6.5 AS gateway-src
 # ─── Stage 2: hermes-workspace runtime base (Node 22 + built React app) ─────
 # Pinned to v2.3.0 — same rationale as above. Never use :latest or :main.
 # Upgrade by bumping the version explicitly here, after reviewing
-# https://github.com/outsourc-e/hermes-workspace/releases
-FROM hermes-workspace-local:v2.3.0
+# https://github.com/outsourc-e/hermes-workspace/releases AND re-vendoring
+# build/hermes-workspace-base/Dockerfile from upstream at the new tag, then
+# triggering .github/workflows/hermes-workspace-base.yml.
+#
+# The base image is NOT pulled directly from ghcr.io/outsourc-e (we don't
+# trust it to stay public). Instead, this repo rebuilds it from upstream
+# source via the hermes-workspace-base workflow and publishes under our
+# GHCR package. Override WORKSPACE_BASE_IMAGE below to point at a mirror
+# or a personal fork.
+ARG WORKSPACE_BASE_IMAGE=ghcr.io/Autobricks-AI/autobricksai-registry/hermes-workspace-base:v2.3.0
+FROM ${WORKSPACE_BASE_IMAGE}
 
 USER root
 
