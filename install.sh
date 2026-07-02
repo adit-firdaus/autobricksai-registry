@@ -86,6 +86,30 @@ set_env() { # key value
 }
 gen_secret() { openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
+# Best-effort start of the Docker engine when it's installed but not running.
+# ponytail: fire-and-forget launch per OS; the caller's retry loop does the waiting.
+start_docker_engine() {
+  case "$(uname -s)" in
+    Darwin)
+      info "Starting Docker Desktop ..."
+      open -a Docker 2>/dev/null || open -a "Docker Desktop" 2>/dev/null || true ;;
+    Linux)
+      # WSL: Docker Desktop's engine lives on the Windows side — nudge it via its exe.
+      if grep -qi microsoft /proc/version 2>/dev/null && command -v powershell.exe >/dev/null 2>&1; then
+        info "Starting Docker Desktop (Windows host) ..."
+        powershell.exe -NoProfile -Command "Start-Process 'Docker Desktop'" 2>/dev/null || true
+      else
+        info "Starting the Docker service ..."
+        sudo systemctl start docker 2>/dev/null || systemctl --user start docker 2>/dev/null || true
+      fi ;;
+    MINGW*|MSYS*|CYGWIN*)
+      info "Starting Docker Desktop ..."
+      local exe="/c/Program Files/Docker/Docker/Docker Desktop.exe"
+      if [ -f "$exe" ]; then ( "$exe" >/dev/null 2>&1 & )
+      else powershell.exe -NoProfile -Command "Start-Process 'Docker Desktop'" 2>/dev/null || true; fi ;;
+  esac
+}
+
 # ---- docker preflight (memoised via $COMPOSE) ----
 need_docker() {
   [ -n "$COMPOSE" ] && return 0
@@ -97,7 +121,20 @@ need_docker() {
     esac
     die "Docker is not installed. $hint"
   fi
-  docker info >/dev/null 2>&1 || die "Docker is installed but the daemon isn't running. Start Docker and re-run."
+  # Daemon readiness: don't fail on the first miss. Docker Desktop (esp. Windows/WSL2)
+  # can report "Engine running" in the UI seconds before the CLI accepts connections,
+  # so a one-shot `docker info` gives false negatives right after startup. If it's not
+  # up, best-effort auto-start the engine, then retry ~60s.
+  if ! docker info >/dev/null 2>&1; then
+    start_docker_engine   # best-effort; no-op if we can't
+    info "Waiting for the Docker daemon to accept connections ..."
+    local i
+    for i in $(seq 1 30); do
+      docker info >/dev/null 2>&1 && break
+      sleep 2
+    done
+    docker info >/dev/null 2>&1 || die "Docker is installed but the daemon isn't answering. Start Docker Desktop (wait for 'Engine running'), then re-run."
+  fi
   if docker compose version >/dev/null 2>&1; then COMPOSE="docker compose"
   elif command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose"
   else die "Docker Compose not found. Update Docker Desktop, or install the compose plugin."; fi
